@@ -1,4 +1,3 @@
-using System.Collections;
 using UnityEngine;
 
 namespace TankDuel.Core
@@ -7,23 +6,42 @@ namespace TankDuel.Core
     /// Стена по центру арены. Пока цел коллайдер — физически блокирует танки
     /// (обычная столкновение Rigidbody) и снаряды (Projectile сам умирает
     /// об любой не-триггерный коллайдер, отдельного кода тут не нужно).
-    /// На WallDrop опускается за MatchController.wallDropDuration, коллайдер
-    /// выключается ровно в момент, когда открывается фаза Duel.
+    /// Двигается кинематическим Rigidbody.MovePosition в FixedUpdate — а не
+    /// прямым присваиванием transform.position: коллайдер без Rigidbody,
+    /// который телепортируется каждый кадр, физика считает статичной геометрией,
+    /// внезапно сдвинутой. Если в этот момент танк упирается в стену, контакт
+    /// ломается и в Rigidbody танка может влететь паразитный крутящий момент —
+    /// именно так стена "закручивала" танк при опускании.
+    /// Коллайдер выключается ровно в момент, когда стена реально ушла (не раньше).
     /// </summary>
     [RequireComponent(typeof(Collider))]
+    [RequireComponent(typeof(Rigidbody))]
     public class Wall : MonoBehaviour
     {
         [Tooltip("На сколько метров стена уходит вниз при опускании")]
         public float sinkDistance = 4f;
 
         Collider wallCollider;
+        Rigidbody body;
         Vector3 closedPosition;
-        Coroutine animation;
+        Vector3 openPosition;
+
+        bool dropping;
+        float dropStartTime;
+        float dropDuration;
 
         void Awake()
         {
             wallCollider = GetComponent<Collider>();
+
+            body = GetComponent<Rigidbody>();
+            if (body == null)
+                body = gameObject.AddComponent<Rigidbody>(); // на случай, если Wall стоял на объекте ещё до этого фикса
+            body.isKinematic = true;
+            body.useGravity = false;
+
             closedPosition = transform.position;
+            openPosition = closedPosition + Vector3.down * sinkDistance;
         }
 
         void Start()
@@ -47,49 +65,34 @@ namespace TankDuel.Core
         {
             if (phase == MatchPhase.WallDrop)
             {
-                Restart(AnimateDrop(MatchController.Instance.wallDropDuration));
+                dropDuration = MatchController.Instance.wallDropDuration;
+                dropStartTime = Time.time;
+                dropping = true;
             }
             else if (phase == MatchPhase.Warmup)
             {
                 // Рестарт матча (кнопка «ещё раз») — стена возвращается на место
-                Restart(null);
-                transform.position = closedPosition;
+                dropping = false;
+                body.MovePosition(closedPosition);
                 wallCollider.enabled = true;
             }
         }
 
-        void Restart(IEnumerator routine)
+        void FixedUpdate()
         {
-            if (animation != null)
-                StopCoroutine(animation);
-            animation = routine != null ? StartCoroutine(routine) : null;
-        }
+            if (!dropping)
+                return;
 
-        IEnumerator AnimateDrop(float duration)
-        {
-            var start = transform.position;
-            var end = start + Vector3.down * sinkDistance;
-
-            if (duration <= 0f)
+            float t = dropDuration > 0f ? (Time.time - dropStartTime) / dropDuration : 1f;
+            if (t >= 1f)
             {
-                transform.position = end;
-            }
-            else
-            {
-                float t = 0f;
-                while (t < duration)
-                {
-                    t += Time.deltaTime;
-                    transform.position = Vector3.Lerp(start, end, t / duration);
-                    yield return null;
-                }
-                transform.position = end;
+                body.MovePosition(openPosition);
+                wallCollider.enabled = false; // стена реально ушла — до этого момента физически на месте
+                dropping = false;
+                return;
             }
 
-            // Выключаем коллайдер только когда стена реально ушла —
-            // до этого момента она всё ещё физически на месте, даже если уже видно движение
-            wallCollider.enabled = false;
-            animation = null;
+            body.MovePosition(Vector3.Lerp(closedPosition, openPosition, t));
         }
     }
 }

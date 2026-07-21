@@ -71,6 +71,11 @@ namespace TankDuel.Tank
 
             body.linearVelocity = new Vector3(move.x, 0f, move.y) * Stats.moveSpeed;
 
+            // Вращение — целиком на нашей стороне: гасим любой крутящий момент,
+            // который физика могла вкинуть сама (нестабильный контакт, столкновение
+            // с другим танком и т.п.), и поворачиваем только через MoveRotation ниже.
+            body.angularVelocity = Vector3.zero;
+
             // Корпус доворачивается в сторону движения
             if (move.sqrMagnitude > 0.001f)
             {
