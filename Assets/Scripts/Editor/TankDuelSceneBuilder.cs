@@ -30,6 +30,9 @@ namespace TankDuel.EditorTools
             EnsureComponent<MatchController>(go);
             EnsureComponent<MatchPhaseLogger>(go);
 
+            // Самолечение: подчищаем обломки удалённых скриптов (например, TankBuildSelfCheck)
+            GameObjectUtility.RemoveMonoBehavioursWithMissingScript(go);
+
             EditorSceneManager.MarkSceneDirty(go.scene);
             Debug.Log("[Tank Duel] Match Core собран/обновлён: объект «Match» в сцене.");
         }
@@ -153,6 +156,31 @@ namespace TankDuel.EditorTools
             go.transform.localPosition = localPos;
             go.transform.localScale = localScale;
             return go;
+        }
+
+        // ---------- Утилиты ----------
+
+        /// <summary>Снимает «Missing Script» со всех объектов открытых сцен. Нужен после удаления временных скриптов.</summary>
+        [MenuItem("Tank Duel/Remove Missing Scripts In Scene")]
+        public static void RemoveMissingScriptsInScene()
+        {
+            int removed = 0;
+            foreach (var root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
+            {
+                foreach (var t in root.GetComponentsInChildren<Transform>(true))
+                {
+                    int count = GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(t.gameObject);
+                    if (count > 0)
+                    {
+                        GameObjectUtility.RemoveMonoBehavioursWithMissingScript(t.gameObject);
+                        removed += count;
+                    }
+                }
+            }
+
+            if (removed > 0)
+                EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+            Debug.Log($"[Tank Duel] Снято обломков Missing Script: {removed}.");
         }
 
         // ---------- Конфиги ----------
