@@ -17,6 +17,7 @@ namespace TankDuel.EditorTools
         const string TankConfigPath = "Assets/ScriptableObjects/TankConfig.asset";
         const string UpgradeConfigPath = "Assets/ScriptableObjects/UpgradeConfig.asset";
         const string WaveConfigPath = "Assets/ScriptableObjects/WaveConfig.asset";
+        const string FarmBotConfigPath = "Assets/ScriptableObjects/FarmBotConfig.asset";
 
         const string FarmBotPrefabPath = "Assets/Prefabs/FarmBot.prefab";
         const string CratePrefabPath = "Assets/Prefabs/Crate.prefab";
@@ -365,15 +366,28 @@ namespace TankDuel.EditorTools
         [MenuItem("Tank Duel/Create Default Prefabs")]
         public static void CreateDefaultPrefabs()
         {
-            // Фарм-бот: пока статичная мишень, ИИ приедет в 2.2 отдельным компонентом
+            // Фарм-бот: тот же TankController, что у игрока, — просто с BotInputSource
+            // вместо PlayerInputSource. В этом весь смысл абстракции ITankInputSource из 1.3.
             CreatePrefabIfMissing(FarmBotPrefabPath, () =>
             {
                 var go = GameObject.CreatePrimitive(PrimitiveType.Capsule);
                 go.name = "FarmBot";
                 go.transform.localScale = new Vector3(0.9f, 0.9f, 0.9f);
-                go.AddComponent<Health>().maxHealth = 30f;
+
+                var controller = go.AddComponent<TankController>(); // Rigidbody и Health придут через RequireComponent
+                controller.config = AssetDatabase.LoadAssetAtPath<TankConfig>(FarmBotConfigPath);
+                controller.upgradeConfig = AssetDatabase.LoadAssetAtPath<UpgradeConfig>(UpgradeConfigPath);
+
+                var projectilePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(ProjectilePrefabPath);
+                if (projectilePrefab != null)
+                    controller.projectilePrefab = projectilePrefab.GetComponent<Projectile>();
+
+                go.GetComponent<Rigidbody>().useGravity = false;
+                go.AddComponent<BotInputSource>();
+
                 return go;
             });
+            UpgradeFarmBotToTank(); // мигрирует FarmBot, оставшийся с задачи 2.1 (там он был просто Health на капсуле)
 
             // Разрушаемый ящик
             CreatePrefabIfMissing(CratePrefabPath, () =>
@@ -417,6 +431,42 @@ namespace TankDuel.EditorTools
             Debug.Log($"[Tank Duel] Создан префаб: {path}");
         }
 
+        /// <summary>
+        /// Задача 2.1 сделала FarmBot просто капсулой с Health. Задача 2.2 достраивает
+        /// его до полноценного танка (TankController + BotInputSource) — но идемпотентный
+        /// CreatePrefabIfMissing пропустит уже существующий файл, так что для уже
+        /// заведённых проектов нужна отдельная миграция содержимого префаба.
+        /// </summary>
+        static void UpgradeFarmBotToTank()
+        {
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(FarmBotPrefabPath) is not GameObject existing)
+                return; // префаба ещё нет — его уже собрал CreatePrefabIfMissing выше
+            if (existing.GetComponent<TankController>() != null)
+                return; // уже апгрейжен
+
+            var contents = PrefabUtility.LoadPrefabContents(FarmBotPrefabPath);
+
+            var oldHealth = contents.GetComponent<Health>();
+            if (oldHealth != null)
+                Object.DestroyImmediate(oldHealth);
+
+            var controller = contents.AddComponent<TankController>(); // Rigidbody и Health вернутся через RequireComponent
+            controller.config = AssetDatabase.LoadAssetAtPath<TankConfig>(FarmBotConfigPath);
+            controller.upgradeConfig = AssetDatabase.LoadAssetAtPath<UpgradeConfig>(UpgradeConfigPath);
+
+            var projectilePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(ProjectilePrefabPath);
+            if (projectilePrefab != null)
+                controller.projectilePrefab = projectilePrefab.GetComponent<Projectile>();
+
+            contents.GetComponent<Rigidbody>().useGravity = false;
+            contents.AddComponent<BotInputSource>();
+
+            PrefabUtility.SaveAsPrefabAsset(contents, FarmBotPrefabPath);
+            PrefabUtility.UnloadPrefabContents(contents);
+
+            Debug.Log("[Tank Duel] FarmBot обновлён: теперь TankController + BotInputSource (раньше — просто Health).");
+        }
+
         static void ApplyPrefabMaterial(string prefabPath, Material material)
         {
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
@@ -434,6 +484,16 @@ namespace TankDuel.EditorTools
         public static void CreateDefaultConfigs()
         {
             CreateIfMissing<TankConfig>(TankConfigPath, null);
+
+            // Слабее и медленнее игрока: изредка кусается, легко фармится
+            CreateIfMissing<TankConfig>(FarmBotConfigPath, config =>
+            {
+                config.baseHealth = 30f;
+                config.baseDamage = 5f;
+                config.baseFireRate = 0.4f;  // выстрел раз в ~2.5 сек
+                config.baseMoveSpeed = 3f;
+            });
+
             CreateIfMissing<UpgradeConfig>(UpgradeConfigPath, config =>
             {
                 // Стартовый баланс — крутить в инспекторе, не здесь
