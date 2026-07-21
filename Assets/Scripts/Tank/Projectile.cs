@@ -5,8 +5,9 @@ namespace TankDuel.Tank
 {
     /// <summary>
     /// Снаряд: летит по прямой, бьёт первый чужой Health на пути, об стены умирает.
-    /// Instantiate/Destroy пока сознательно — пул объектов придёт в задаче 2.1.
-    /// У префаба (если есть) коллайдер должен быть isTrigger.
+    /// Идёт через пул (задача 2.1), если назначен префаб; без префаба —
+    /// запасной путь на примитивах, без пула.
+    /// У префаба коллайдер должен быть isTrigger.
     /// </summary>
     [RequireComponent(typeof(Rigidbody))]
     public class Projectile : MonoBehaviour
@@ -19,9 +20,16 @@ namespace TankDuel.Tank
         public static void Spawn(Projectile prefab, Vector3 position, Vector3 direction,
             float speed, float lifetime, float damage, int team)
         {
-            var p = prefab != null
-                ? Instantiate(prefab, position, Quaternion.LookRotation(direction))
-                : CreateFromPrimitive(position, direction);
+            Projectile p;
+            if (prefab != null)
+            {
+                var go = PoolManager.Get(prefab.gameObject, position, Quaternion.LookRotation(direction));
+                p = go.GetComponent<Projectile>();
+            }
+            else
+            {
+                p = CreateFromPrimitive(position, direction);
+            }
 
             p.speed = speed;
             p.damage = damage;
@@ -47,7 +55,7 @@ namespace TankDuel.Tank
         {
             transform.position += transform.forward * (speed * Time.deltaTime);
             if (Time.time >= deathTime)
-                Destroy(gameObject);
+                PooledObject.Despawn(gameObject);
         }
 
         void OnTriggerEnter(Collider other)
@@ -59,11 +67,11 @@ namespace TankDuel.Tank
                     return; // своих не бьём, включая стрелявшего
 
                 health.TakeDamage(damage);
-                Destroy(gameObject);
+                PooledObject.Despawn(gameObject);
             }
             else if (!other.isTrigger)
             {
-                Destroy(gameObject); // стена, декорации
+                PooledObject.Despawn(gameObject); // стена, декорации
             }
         }
     }

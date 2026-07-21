@@ -16,6 +16,11 @@ namespace TankDuel.EditorTools
     {
         const string TankConfigPath = "Assets/ScriptableObjects/TankConfig.asset";
         const string UpgradeConfigPath = "Assets/ScriptableObjects/UpgradeConfig.asset";
+        const string WaveConfigPath = "Assets/ScriptableObjects/WaveConfig.asset";
+
+        const string FarmBotPrefabPath = "Assets/Prefabs/FarmBot.prefab";
+        const string CratePrefabPath = "Assets/Prefabs/Crate.prefab";
+        const string ProjectilePrefabPath = "Assets/Prefabs/Projectile.prefab";
 
         [MenuItem("Tank Duel/Build Match Core")]
         public static void BuildMatchCore()
@@ -137,6 +142,10 @@ namespace TankDuel.EditorTools
             controller.config = AssetDatabase.LoadAssetAtPath<TankConfig>(TankConfigPath);
             controller.upgradeConfig = AssetDatabase.LoadAssetAtPath<UpgradeConfig>(UpgradeConfigPath);
 
+            var projectilePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(ProjectilePrefabPath);
+            if (projectilePrefab != null)
+                controller.projectilePrefab = projectilePrefab.GetComponent<Projectile>();
+
             root.GetComponent<Health>().team = team;
             root.GetComponent<Rigidbody>().useGravity = false;
 
@@ -168,7 +177,8 @@ namespace TankDuel.EditorTools
         [MenuItem("Tank Duel/Build Arena")]
         public static void BuildArena()
         {
-            BuildMatchCore(); // стене и танкам нужен MatchController в сцене
+            BuildMatchCore();       // стене и танкам нужен MatchController в сцене
+            CreateDefaultConfigs(); // танкам — конфиги, спавнерам — волны и префабы целей
 
             // Земля на всю арену: от -ArenaHalfDepth до +ArenaHalfDepth по Z.
             // Общий объект с Build Test Range — тот же принцип идемпотентности,
@@ -219,6 +229,11 @@ namespace TankDuel.EditorTools
             opponentTank.transform.position = opponentSpawn.position + Vector3.up * 0.31f;
             opponentTank.transform.rotation = Quaternion.Euler(0f, 180f, 0f); // лицом к игроку
 
+            // Спавнеры: по одному на половину, зона чуть уже арены и не упирается в стену
+            var waveConfig = AssetDatabase.LoadAssetAtPath<WaveConfig>(WaveConfigPath);
+            BuildSpawner("PlayerSpawner", ownerTeam: 0, center: new Vector3(0f, 0f, -13f), waveConfig);
+            BuildSpawner("OpponentSpawner", ownerTeam: 1, center: new Vector3(0f, 0f, 13f), waveConfig);
+
             // Камера сверху с наклоном, чтобы обе половины были в кадре
             var cam = Camera.main;
             if (cam != null)
@@ -228,8 +243,24 @@ namespace TankDuel.EditorTools
             }
 
             EditorSceneManager.MarkSceneDirty(wallGo.scene);
-            Debug.Log("[Tank Duel] Arena собрана. Стена блокирует до конца фазы WallDrop, потом опускается " +
-                      "и открывает проход. Для быстрой проверки поставь farmDuration на MatchController в 3-5 сек.");
+            Debug.Log("[Tank Duel] Arena собрана: стена, спавн-поинты, два спавнера, танки. " +
+                      "Для быстрой проверки поставь farmDuration на MatchController в 10-15 сек.");
+        }
+
+        static void BuildSpawner(string name, int ownerTeam, Vector3 center, WaveConfig waveConfig)
+        {
+            var go = GameObject.Find(name);
+            if (go == null)
+            {
+                go = new GameObject(name);
+                Undo.RegisterCreatedObjectUndo(go, "Build Arena");
+            }
+            go.transform.position = center;
+
+            var spawner = EnsureComponent<Spawner>(go);
+            spawner.ownerTeam = ownerTeam;
+            spawner.zoneSize = new Vector2(ArenaWidth - 4f, ArenaHalfDepth - 8f);
+            spawner.waveConfig = waveConfig;
         }
 
         static Transform EnsureChild(Transform parent, string name, Vector3 localPosition)
@@ -271,6 +302,57 @@ namespace TankDuel.EditorTools
             Debug.Log($"[Tank Duel] Снято обломков Missing Script: {removed}.");
         }
 
+        // ---------- Префабы целей и снаряда ----------
+
+        [MenuItem("Tank Duel/Create Default Prefabs")]
+        public static void CreateDefaultPrefabs()
+        {
+            // Фарм-бот: пока статичная мишень, ИИ приедет в 2.2 отдельным компонентом
+            CreatePrefabIfMissing(FarmBotPrefabPath, () =>
+            {
+                var go = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+                go.name = "FarmBot";
+                go.transform.localScale = new Vector3(0.9f, 0.9f, 0.9f);
+                go.AddComponent<Health>().maxHealth = 30f;
+                return go;
+            });
+
+            // Разрушаемый ящик
+            CreatePrefabIfMissing(CratePrefabPath, () =>
+            {
+                var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                go.name = "Crate";
+                go.transform.localScale = new Vector3(1.2f, 1.2f, 1.2f);
+                go.AddComponent<Health>().maxHealth = 20f;
+                return go;
+            });
+
+            // Снаряд: триггер + кинематика, двигает его сам Projectile
+            CreatePrefabIfMissing(ProjectilePrefabPath, () =>
+            {
+                var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                go.name = "Projectile";
+                go.transform.localScale = Vector3.one * 0.35f;
+                go.GetComponent<Collider>().isTrigger = true;
+                go.AddComponent<Projectile>(); // Rigidbody придёт через RequireComponent
+                go.GetComponent<Rigidbody>().isKinematic = true;
+                return go;
+            });
+
+            AssetDatabase.SaveAssets();
+        }
+
+        static void CreatePrefabIfMissing(string path, System.Func<GameObject> build)
+        {
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(path) != null)
+                return;
+
+            var temp = build();
+            PrefabUtility.SaveAsPrefabAsset(temp, path);
+            Object.DestroyImmediate(temp);
+            Debug.Log($"[Tank Duel] Создан префаб: {path}");
+        }
+
         // ---------- Конфиги ----------
 
         [MenuItem("Tank Duel/Create Default Configs")]
@@ -286,6 +368,35 @@ namespace TankDuel.EditorTools
                     Track(UpgradeType.FireRate, (10, 0.5f), (30, 0.5f)),
                     Track(UpgradeType.MoveSpeed, (15, 1f), (35, 1f)),
                     Track(UpgradeType.Health, (10, 25f), (25, 25f), (50, 50f)),
+                };
+            });
+
+            CreateDefaultPrefabs(); // конфигу волн нужны ссылки на префабы
+
+            CreateIfMissing<WaveConfig>(WaveConfigPath, config =>
+            {
+                config.entries = new[]
+                {
+                    new WaveConfig.Entry
+                    {
+                        label = "Боты",
+                        prefab = AssetDatabase.LoadAssetAtPath<GameObject>(FarmBotPrefabPath),
+                        startDelay = 0f,
+                        interval = 2f,
+                        maxAlive = 6,
+                        health = 30f,
+                        spawnHeight = 1f,
+                    },
+                    new WaveConfig.Entry
+                    {
+                        label = "Ящики",
+                        prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CratePrefabPath),
+                        startDelay = 1f,
+                        interval = 3f,
+                        maxAlive = 8,
+                        health = 20f,
+                        spawnHeight = 0.6f,
+                    },
                 };
             });
 
