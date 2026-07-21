@@ -158,6 +158,94 @@ namespace TankDuel.EditorTools
             return go;
         }
 
+        // ---------- Задача 1.4: арена и стена ----------
+
+        const float ArenaHalfDepth = 25f; // длина одной половины по Z
+        const float ArenaWidth = 20f;     // ширина арены по X
+        const float WallHeight = 3f;
+        const float WallThickness = 1f;
+
+        [MenuItem("Tank Duel/Build Arena")]
+        public static void BuildArena()
+        {
+            BuildMatchCore(); // стене и танкам нужен MatchController в сцене
+
+            // Земля на всю арену: от -ArenaHalfDepth до +ArenaHalfDepth по Z.
+            // Общий объект с Build Test Range — тот же принцип идемпотентности,
+            // просто подгоняем существующую землю под размеры арены.
+            var ground = GameObject.Find("Ground");
+            if (ground == null)
+            {
+                ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
+                ground.name = "Ground";
+                Undo.RegisterCreatedObjectUndo(ground, "Build Arena");
+            }
+            ground.transform.position = Vector3.zero;
+            ground.transform.localScale = new Vector3(ArenaWidth / 10f, 1f, (ArenaHalfDepth * 2f) / 10f);
+
+            // Стена по центру: делит арену на половину игрока (Z<0) и оппонента (Z>0)
+            var wallGo = GameObject.Find("Wall");
+            if (wallGo == null)
+            {
+                wallGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                wallGo.name = "Wall";
+                Undo.RegisterCreatedObjectUndo(wallGo, "Build Arena");
+            }
+            wallGo.transform.position = new Vector3(0f, WallHeight / 2f, 0f);
+            wallGo.transform.localScale = new Vector3(ArenaWidth + 0.5f, WallHeight, WallThickness);
+            EnsureComponent<Wall>(wallGo);
+
+            // Точки спавна для дуэли
+            var spawnRoot = GameObject.Find("SpawnPoints");
+            if (spawnRoot == null)
+            {
+                spawnRoot = new GameObject("SpawnPoints");
+                Undo.RegisterCreatedObjectUndo(spawnRoot, "Build Arena");
+            }
+            var playerSpawn = EnsureChild(spawnRoot.transform, "PlayerSpawn", new Vector3(0f, 0f, -ArenaHalfDepth + 5f));
+            var opponentSpawn = EnsureChild(spawnRoot.transform, "OpponentSpawn", new Vector3(0f, 0f, ArenaHalfDepth - 5f));
+
+            // Танки на точках спавна. Оппонент пока без входа — ИИ приедет в 2.4/3.1,
+            // сейчас это просто мишень для проверки стены с той стороны.
+            var playerTank = GameObject.Find("PlayerTank");
+            if (playerTank == null)
+                playerTank = BuildTankObject("PlayerTank", team: 0, withPlayerInput: true);
+            playerTank.transform.position = playerSpawn.position + Vector3.up * 0.31f;
+            playerTank.transform.rotation = Quaternion.identity;
+
+            var opponentTank = GameObject.Find("OpponentTank");
+            if (opponentTank == null)
+                opponentTank = BuildTankObject("OpponentTank", team: 1, withPlayerInput: false);
+            opponentTank.transform.position = opponentSpawn.position + Vector3.up * 0.31f;
+            opponentTank.transform.rotation = Quaternion.Euler(0f, 180f, 0f); // лицом к игроку
+
+            // Камера сверху с наклоном, чтобы обе половины были в кадре
+            var cam = Camera.main;
+            if (cam != null)
+            {
+                cam.transform.position = new Vector3(0f, 42f, -30f);
+                cam.transform.rotation = Quaternion.Euler(60f, 0f, 0f);
+            }
+
+            EditorSceneManager.MarkSceneDirty(wallGo.scene);
+            Debug.Log("[Tank Duel] Arena собрана. Стена блокирует до конца фазы WallDrop, потом опускается " +
+                      "и открывает проход. Для быстрой проверки поставь farmDuration на MatchController в 3-5 сек.");
+        }
+
+        static Transform EnsureChild(Transform parent, string name, Vector3 localPosition)
+        {
+            var child = parent.Find(name);
+            if (child == null)
+            {
+                var go = new GameObject(name);
+                Undo.RegisterCreatedObjectUndo(go, "Build Arena");
+                child = go.transform;
+                child.SetParent(parent, false);
+            }
+            child.localPosition = localPosition;
+            return child;
+        }
+
         // ---------- Утилиты ----------
 
         /// <summary>Снимает «Missing Script» со всех объектов открытых сцен. Нужен после удаления временных скриптов.</summary>
