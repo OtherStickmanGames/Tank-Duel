@@ -22,6 +22,33 @@ namespace TankDuel.EditorTools
         const string CratePrefabPath = "Assets/Prefabs/Crate.prefab";
         const string ProjectilePrefabPath = "Assets/Prefabs/Projectile.prefab";
 
+        // ---------- Цвет вместо серого грейбокса ----------
+        // Палитра временная — заменится артом, но пока хотя бы читаемо кто есть кто.
+        const string MatDir = "Assets/Art/Materials/";
+        static readonly Color PlayerColor = new Color(0.25f, 0.55f, 0.95f);   // синий — игрок
+        static readonly Color OpponentColor = new Color(0.9f, 0.25f, 0.25f);  // красный — оппонент
+        static readonly Color WallColor = new Color(0.95f, 0.75f, 0.15f);     // жёлтый — барьер, нейтральный
+        static readonly Color FarmBotColor = new Color(0.95f, 0.55f, 0.15f);  // оранжевый — фарм-цель
+        static readonly Color CrateColor = new Color(0.55f, 0.4f, 0.22f);     // коричневый — ящик
+        static readonly Color GroundColor = new Color(0.32f, 0.38f, 0.28f);   // тёмно-оливковый — земля
+        static readonly Color ProjectileColor = new Color(1f, 0.92f, 0.35f);  // ярко-жёлтый — снаряд, видно на земле
+
+        static Material GetOrCreateMaterial(string path, Color color)
+        {
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                mat = new Material(Shader.Find("Universal Render Pipeline/Lit"))
+                {
+                    name = System.IO.Path.GetFileNameWithoutExtension(path),
+                };
+                AssetDatabase.CreateAsset(mat, path);
+            }
+            mat.color = color; // держим цвет в синхроне на случай ручных правок палитры выше
+            EditorUtility.SetDirty(mat);
+            return mat;
+        }
+
         [MenuItem("Tank Duel/Build Match Core")]
         public static void BuildMatchCore()
         {
@@ -59,6 +86,7 @@ namespace TankDuel.EditorTools
             }
             ground.transform.position = Vector3.zero;
             ground.transform.localScale = new Vector3(4f, 1f, 4f); // 40x40 метров
+            ground.GetComponent<Renderer>().sharedMaterial = GetOrCreateMaterial(MatDir + "Mat_Ground.mat", GroundColor);
 
             // Камера сверху с наклоном
             var cam = Camera.main;
@@ -72,6 +100,7 @@ namespace TankDuel.EditorTools
             var tank = GameObject.Find("PlayerTank");
             if (tank == null)
                 tank = BuildTankObject("PlayerTank", team: 0, withPlayerInput: true);
+            ApplyTankMaterial(tank, team: 0);
             tank.transform.position = new Vector3(0f, 0.31f, -8f);
 
             // Мишени: пересоздаются с нуля при каждом запуске
@@ -112,9 +141,13 @@ namespace TankDuel.EditorTools
             var root = new GameObject(name);
             Undo.RegisterCreatedObjectUndo(root, "Build Tank");
 
+            var tankMaterial = team == 0
+                ? GetOrCreateMaterial(MatDir + "Mat_PlayerTank.mat", PlayerColor)
+                : GetOrCreateMaterial(MatDir + "Mat_OpponentTank.mat", OpponentColor);
+
             // Визуал: корпус
             var bodyVisual = CreateVisual(PrimitiveType.Cube, "Body", root.transform,
-                Vector3.zero, new Vector3(1.8f, 0.6f, 2.6f));
+                Vector3.zero, new Vector3(1.8f, 0.6f, 2.6f), tankMaterial);
 
             // Башня на пивоте — контроллер вращает пивот, не визуал
             var pivot = new GameObject("TurretPivot").transform;
@@ -122,9 +155,9 @@ namespace TankDuel.EditorTools
             pivot.localPosition = new Vector3(0f, 0.55f, 0f);
 
             CreateVisual(PrimitiveType.Cube, "Turret", pivot,
-                Vector3.zero, new Vector3(1.1f, 0.45f, 1.1f));
+                Vector3.zero, new Vector3(1.1f, 0.45f, 1.1f), tankMaterial);
             CreateVisual(PrimitiveType.Cube, "Barrel", pivot,
-                new Vector3(0f, 0f, 1f), new Vector3(0.25f, 0.25f, 1.4f));
+                new Vector3(0f, 0f, 1f), new Vector3(0.25f, 0.25f, 1.4f), tankMaterial);
 
             var firePoint = new GameObject("FirePoint").transform;
             firePoint.SetParent(pivot, false);
@@ -156,7 +189,7 @@ namespace TankDuel.EditorTools
         }
 
         static GameObject CreateVisual(PrimitiveType type, string name, Transform parent,
-            Vector3 localPos, Vector3 localScale)
+            Vector3 localPos, Vector3 localScale, Material material = null)
         {
             var go = GameObject.CreatePrimitive(type);
             go.name = name;
@@ -164,7 +197,28 @@ namespace TankDuel.EditorTools
             go.transform.SetParent(parent, false);
             go.transform.localPosition = localPos;
             go.transform.localScale = localScale;
+            if (material != null)
+                go.GetComponent<Renderer>().sharedMaterial = material;
             return go;
+        }
+
+        /// <summary>
+        /// Перекрашивает готовый танк (Body/Turret/Barrel), не пересобирая его.
+        /// Нужен отдельно от BuildTankObject: идемпотентные генераторы пропускают
+        /// уже существующий танк по имени, значит его материал сам не обновится.
+        /// </summary>
+        static void ApplyTankMaterial(GameObject tank, int team)
+        {
+            var material = team == 0
+                ? GetOrCreateMaterial(MatDir + "Mat_PlayerTank.mat", PlayerColor)
+                : GetOrCreateMaterial(MatDir + "Mat_OpponentTank.mat", OpponentColor);
+
+            foreach (var path in new[] { "Body", "TurretPivot/Turret", "TurretPivot/Barrel" })
+            {
+                var renderer = tank.transform.Find(path)?.GetComponent<Renderer>();
+                if (renderer != null)
+                    renderer.sharedMaterial = material;
+            }
         }
 
         // ---------- Задача 1.4: арена и стена ----------
@@ -192,6 +246,7 @@ namespace TankDuel.EditorTools
             }
             ground.transform.position = Vector3.zero;
             ground.transform.localScale = new Vector3(ArenaWidth / 10f, 1f, (ArenaHalfDepth * 2f) / 10f);
+            ground.GetComponent<Renderer>().sharedMaterial = GetOrCreateMaterial(MatDir + "Mat_Ground.mat", GroundColor);
 
             // Стена по центру: делит арену на половину игрока (Z<0) и оппонента (Z>0)
             var wallGo = GameObject.Find("Wall");
@@ -203,6 +258,7 @@ namespace TankDuel.EditorTools
             }
             wallGo.transform.position = new Vector3(0f, WallHeight / 2f, 0f);
             wallGo.transform.localScale = new Vector3(ArenaWidth + 0.5f, WallHeight, WallThickness);
+            wallGo.GetComponent<Renderer>().sharedMaterial = GetOrCreateMaterial(MatDir + "Mat_Wall.mat", WallColor);
             EnsureComponent<Wall>(wallGo);
 
             // Точки спавна для дуэли
@@ -220,12 +276,14 @@ namespace TankDuel.EditorTools
             var playerTank = GameObject.Find("PlayerTank");
             if (playerTank == null)
                 playerTank = BuildTankObject("PlayerTank", team: 0, withPlayerInput: true);
+            ApplyTankMaterial(playerTank, team: 0);
             playerTank.transform.position = playerSpawn.position + Vector3.up * 0.31f;
             playerTank.transform.rotation = Quaternion.identity;
 
             var opponentTank = GameObject.Find("OpponentTank");
             if (opponentTank == null)
                 opponentTank = BuildTankObject("OpponentTank", team: 1, withPlayerInput: false);
+            ApplyTankMaterial(opponentTank, team: 1);
             opponentTank.transform.position = opponentSpawn.position + Vector3.up * 0.31f;
             opponentTank.transform.rotation = Quaternion.Euler(0f, 180f, 0f); // лицом к игроку
 
@@ -339,6 +397,12 @@ namespace TankDuel.EditorTools
                 return go;
             });
 
+            // Красим независимо от того, только что создан префаб или уже существовал —
+            // так перезапуск этого пункта меню перекрашивает и старые серые префабы тоже
+            ApplyPrefabMaterial(FarmBotPrefabPath, GetOrCreateMaterial(MatDir + "Mat_FarmBot.mat", FarmBotColor));
+            ApplyPrefabMaterial(CratePrefabPath, GetOrCreateMaterial(MatDir + "Mat_Crate.mat", CrateColor));
+            ApplyPrefabMaterial(ProjectilePrefabPath, GetOrCreateMaterial(MatDir + "Mat_Projectile.mat", ProjectileColor));
+
             AssetDatabase.SaveAssets();
         }
 
@@ -351,6 +415,17 @@ namespace TankDuel.EditorTools
             PrefabUtility.SaveAsPrefabAsset(temp, path);
             Object.DestroyImmediate(temp);
             Debug.Log($"[Tank Duel] Создан префаб: {path}");
+        }
+
+        static void ApplyPrefabMaterial(string prefabPath, Material material)
+        {
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            var renderer = prefab != null ? prefab.GetComponent<Renderer>() : null;
+            if (renderer == null || renderer.sharedMaterial == material)
+                return;
+
+            renderer.sharedMaterial = material;
+            EditorUtility.SetDirty(prefab);
         }
 
         // ---------- Конфиги ----------
