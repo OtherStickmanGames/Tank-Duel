@@ -1,9 +1,13 @@
 using TankDuel.Core;
 using TankDuel.Data;
 using TankDuel.Tank;
+using TankDuel.UI;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
+using UnityEngine.UI;
 
 namespace TankDuel.EditorTools
 {
@@ -62,6 +66,7 @@ namespace TankDuel.EditorTools
 
             EnsureComponent<MatchController>(go);
             EnsureComponent<MatchPhaseLogger>(go);
+            EnsureComponent<ScoreSystem>(go);
 
             // Самолечение: подчищаем обломки удалённых скриптов (например, TankBuildSelfCheck)
             GameObjectUtility.RemoveMonoBehavioursWithMissingScript(go);
@@ -301,8 +306,10 @@ namespace TankDuel.EditorTools
                 cam.transform.rotation = Quaternion.Euler(60f, 0f, 0f);
             }
 
+            BuildHud(); // панель прокачки игрока — 2.3
+
             EditorSceneManager.MarkSceneDirty(wallGo.scene);
-            Debug.Log("[Tank Duel] Arena собрана: стена, спавн-поинты, два спавнера, танки. " +
+            Debug.Log("[Tank Duel] Arena собрана: стена, спавн-поинты, два спавнера, танки, HUD. " +
                       "Для быстрой проверки поставь farmDuration на MatchController в 10-15 сек.");
         }
 
@@ -334,6 +341,151 @@ namespace TankDuel.EditorTools
             }
             child.localPosition = localPosition;
             return child;
+        }
+
+        // ---------- Задача 2.3: HUD с прокачкой ----------
+
+        [MenuItem("Tank Duel/Build HUD")]
+        public static void BuildHud()
+        {
+            BuildMatchCore(); // панели нужны ScoreSystem и MatchController в сцене
+
+            EnsureEventSystem();
+
+            var hudGo = GameObject.Find("HUD");
+            if (hudGo == null)
+            {
+                hudGo = new GameObject("HUD");
+                Undo.RegisterCreatedObjectUndo(hudGo, "Build HUD");
+            }
+
+            var canvas = EnsureComponent<Canvas>(hudGo);
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+
+            var scaler = EnsureComponent<CanvasScaler>(hudGo);
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920f, 1080f);
+
+            EnsureComponent<GraphicRaycaster>(hudGo);
+
+            var hudRect = hudGo.GetComponent<RectTransform>();
+
+            // Панель прокачки — низ экрана
+            var panelRect = EnsureUiChild(hudRect, "UpgradePanel");
+            panelRect.anchorMin = new Vector2(0.5f, 0f);
+            panelRect.anchorMax = new Vector2(0.5f, 0f);
+            panelRect.pivot = new Vector2(0.5f, 0f);
+            panelRect.anchoredPosition = new Vector2(0f, 30f);
+            panelRect.sizeDelta = new Vector2(720f, 90f);
+
+            var layout = EnsureComponent<HorizontalLayoutGroup>(panelRect.gameObject);
+            layout.spacing = 12f;
+            layout.childAlignment = TextAnchor.MiddleCenter;
+            layout.childForceExpandWidth = false;
+            layout.childForceExpandHeight = false;
+
+            var damageButton = BuildUpgradeButton(panelRect, "DamageButton");
+            var fireRateButton = BuildUpgradeButton(panelRect, "FireRateButton");
+            var moveSpeedButton = BuildUpgradeButton(panelRect, "MoveSpeedButton");
+            var healthButton = BuildUpgradeButton(panelRect, "HealthButton");
+
+            // Счёт — верх экрана
+            var scoreRect = EnsureUiChild(hudRect, "ScoreText");
+            scoreRect.anchorMin = new Vector2(0.5f, 1f);
+            scoreRect.anchorMax = new Vector2(0.5f, 1f);
+            scoreRect.pivot = new Vector2(0.5f, 1f);
+            scoreRect.anchoredPosition = new Vector2(0f, -30f);
+            scoreRect.sizeDelta = new Vector2(400f, 60f);
+
+            var scoreText = scoreRect.GetComponent<Text>();
+            if (scoreText == null)
+                scoreText = scoreRect.gameObject.AddComponent<Text>();
+            scoreText.font = GetDefaultFont();
+            scoreText.alignment = TextAnchor.MiddleCenter;
+            scoreText.fontSize = 32;
+            scoreText.color = Color.white;
+            scoreText.text = "Очки: 0";
+
+            var upgradePanel = EnsureComponent<UpgradePanel>(panelRect.gameObject);
+            upgradePanel.team = 0;
+            upgradePanel.tank = GameObject.Find("PlayerTank")?.GetComponent<TankController>();
+            upgradePanel.upgradeConfig = AssetDatabase.LoadAssetAtPath<UpgradeConfig>(UpgradeConfigPath);
+            upgradePanel.damageButton = damageButton;
+            upgradePanel.fireRateButton = fireRateButton;
+            upgradePanel.moveSpeedButton = moveSpeedButton;
+            upgradePanel.healthButton = healthButton;
+            upgradePanel.scoreText = scoreText;
+
+            GameObjectUtility.RemoveMonoBehavioursWithMissingScript(hudGo);
+
+            EditorSceneManager.MarkSceneDirty(hudGo.scene);
+            Debug.Log("[Tank Duel] HUD собран: панель прокачки (низ, активна только в фазе Farm) + счёт (верх).");
+        }
+
+        /// <summary>Единственный EventSystem на сцену, с модулем нового Input System вместо легаси.</summary>
+        static void EnsureEventSystem()
+        {
+            var existing = Object.FindFirstObjectByType<EventSystem>();
+            if (existing == null)
+            {
+                var go = new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+                Undo.RegisterCreatedObjectUndo(go, "Build HUD");
+                return;
+            }
+
+            if (existing.GetComponent<InputSystemUIInputModule>() == null)
+                existing.gameObject.AddComponent<InputSystemUIInputModule>();
+
+            var legacyModule = existing.GetComponent<StandaloneInputModule>();
+            if (legacyModule != null)
+                Object.DestroyImmediate(legacyModule);
+        }
+
+        static Font GetDefaultFont() => Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+
+        /// <summary>Идемпотентный RectTransform-ребёнок: находит по имени или создаёт новый.</summary>
+        static RectTransform EnsureUiChild(Transform parent, string name)
+        {
+            var child = parent.Find(name) as RectTransform;
+            if (child == null)
+            {
+                var go = new GameObject(name, typeof(RectTransform));
+                Undo.RegisterCreatedObjectUndo(go, "Build HUD");
+                child = go.GetComponent<RectTransform>();
+                child.SetParent(parent, false);
+            }
+            return child;
+        }
+
+        static Button BuildUpgradeButton(Transform parent, string name)
+        {
+            var rect = EnsureUiChild(parent, name);
+            rect.sizeDelta = new Vector2(160f, 80f);
+
+            var image = rect.GetComponent<Image>();
+            if (image == null)
+                image = rect.gameObject.AddComponent<Image>();
+            image.color = new Color(0.15f, 0.15f, 0.15f, 0.85f);
+
+            var button = rect.GetComponent<Button>();
+            if (button == null)
+                button = rect.gameObject.AddComponent<Button>();
+
+            var labelRect = EnsureUiChild(rect, "Label");
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+
+            var text = labelRect.GetComponent<Text>();
+            if (text == null)
+                text = labelRect.gameObject.AddComponent<Text>();
+            text.font = GetDefaultFont();
+            text.alignment = TextAnchor.MiddleCenter;
+            text.fontSize = 16;
+            text.color = Color.white;
+
+            return button;
         }
 
         // ---------- Утилиты ----------
@@ -520,6 +672,7 @@ namespace TankDuel.EditorTools
                         interval = 2f,
                         maxAlive = 6,
                         health = 30f,
+                        scoreValue = 10, // дороже ящика — бот отстреливается, а не просто стоит
                         spawnHeight = 1f,
                     },
                     new WaveConfig.Entry
@@ -530,6 +683,7 @@ namespace TankDuel.EditorTools
                         interval = 3f,
                         maxAlive = 8,
                         health = 20f,
+                        scoreValue = 5,
                         spawnHeight = 0.6f,
                     },
                 };

@@ -217,6 +217,9 @@ namespace TankDuel.Core
 
         void OnTargetDied(Active record)
         {
+            var entry = waveConfig.entries[record.entryIndex];
+            ScoreSystem.Instance?.AddScore(ownerTeam, entry.scoreValue);
+
             Retire(record);
             active.Remove(record);
         }

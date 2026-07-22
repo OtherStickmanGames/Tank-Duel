@@ -26,6 +26,8 @@ namespace TankDuel.Data
             public int totalLimit;
             [Tooltip("Здоровье экземпляра")]
             public float health = 30f;
+            [Tooltip("Очков владельцу зоны за смерть этого объекта")]
+            public int scoreValue = 10;
             [Tooltip("Высота центра объекта над землёй")]
             public float spawnHeight = 1f;
             [Tooltip("Минимальный отступ от танков и других заспавненных объектов")]

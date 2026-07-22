@@ -30,6 +30,9 @@ namespace TankDuel.Tank
         public Health Health { get; private set; }
         public TankStats Stats { get; private set; }
 
+        /// <summary>Прокачка этого танка в текущем матче. Живёт тут, а не в TankConfig — конфиг общий на всех.</summary>
+        public TankBuild Build { get; private set; } = new TankBuild();
+
         /// <summary>Гейт по фазам матча: снаружи выключается вне Farm/Duel (задача 2.x).</summary>
         public bool ControlsEnabled { get; set; } = true;
 
@@ -52,8 +55,37 @@ namespace TankDuel.Tank
         void Start()
         {
             // Стартовые статы чистого билда, чтобы танк был играбелен сразу
+            ApplyBuildStats();
+
+            // Игрок и оппонент — не пуловые объекты, живут весь матч, поэтому
+            // прокачку и хп нужно сбрасывать вручную на каждый рестарт (Warmup).
+            // Фарм-боты тоже подписываются, пока сидят неактивные в пуле — это
+            // безвредно, при реальном спавне Spawner всё равно переставит им статы.
+            var match = MatchController.Instance;
+            if (match != null)
+                match.PhaseChanged += OnPhaseChanged;
+        }
+
+        void OnDestroy()
+        {
+            if (MatchController.Instance != null)
+                MatchController.Instance.PhaseChanged -= OnPhaseChanged;
+        }
+
+        void OnPhaseChanged(MatchPhase phase)
+        {
+            if (phase != MatchPhase.Warmup)
+                return;
+
+            Build = new TankBuild();
+            ApplyBuildStats();
+            Health.ResetFull();
+        }
+
+        void ApplyBuildStats()
+        {
             if (config != null && upgradeConfig != null)
-                ApplyStats(new TankBuild().ComputeStats(config, upgradeConfig));
+                ApplyStats(Build.ComputeStats(config, upgradeConfig));
             else
                 Debug.LogWarning($"{name}: не назначены конфиги — статы нулевые, танк не поедет");
         }
@@ -62,6 +94,18 @@ namespace TankDuel.Tank
         {
             Stats = stats;
             Health.SetMax(stats.maxHealth);
+        }
+
+        /// <summary>Попытка поднять уровень оси прокачки. Цену и её списание проверяет вызывающий (UpgradePanel/ScoreSystem).</summary>
+        public bool TryUpgrade(UpgradeType type)
+        {
+            if (config == null || upgradeConfig == null)
+                return false;
+            if (!Build.Upgrade(type, upgradeConfig))
+                return false;
+
+            ApplyBuildStats();
+            return true;
         }
 
         void FixedUpdate()
