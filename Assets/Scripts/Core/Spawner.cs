@@ -38,6 +38,9 @@ namespace TankDuel.Core
         // Танки не должны оказаться внутри заспавненного объекта
         Transform[] tanks;
 
+        // Хозяин половины — цель для заспавненных здесь ботов
+        Transform ownerTank;
+
         void Start()
         {
             var match = MatchController.Instance;
@@ -50,6 +53,20 @@ namespace TankDuel.Core
 
             var controllers = FindObjectsByType<Tank.TankController>(FindObjectsSortMode.None);
             tanks = Array.ConvertAll(controllers, c => c.transform);
+
+            // Ищем хозяина половины именно здесь: фарм-боты спавнятся только в фазе Farm,
+            // так что на старте сцены танк своей команды в единственном экземпляре.
+            foreach (var controller in controllers)
+            {
+                if (controller.Health != null && controller.Health.team == ownerTeam)
+                {
+                    ownerTank = controller.transform;
+                    break;
+                }
+            }
+
+            if (ownerTank == null)
+                Debug.LogWarning($"{name}: не найден танк команды {ownerTeam} — ботам будет некого преследовать.");
         }
 
         void OnDestroy()
@@ -140,6 +157,12 @@ namespace TankDuel.Core
             health.team = 1 - ownerTeam;
             health.maxHealth = entry.health;
             health.ResetFull();
+
+            // Цель и границы бота назначаем явно, сам он никого не ищет: поиск по команде
+            // цеплял фарм-бота с соседней половины, и бот ехал к нему сквозь стену
+            var bot = go.GetComponent<Tank.BotInputSource>();
+            if (bot != null)
+                bot.Setup(ownerTank, transform.position, zoneSize);
 
             var record = new Active { go = go, health = health, entryIndex = entryIndex };
             record.onDied = _ => OnTargetDied(record);

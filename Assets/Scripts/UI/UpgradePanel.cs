@@ -1,6 +1,7 @@
 using TankDuel.Core;
 using TankDuel.Data;
 using TankDuel.Tank;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -20,7 +21,7 @@ namespace TankDuel.UI
         public Button fireRateButton;
         public Button moveSpeedButton;
         public Button healthButton;
-        public Text scoreText;
+        public TMP_Text scoreText;
 
         (UpgradeType type, Button button, string label)[] slots;
         bool farmActive;
@@ -105,7 +106,7 @@ namespace TankDuel.UI
             {
                 int level = tank.Build.GetLevel(slot.type);
                 int cost = upgradeConfig.GetCost(slot.type, level);
-                var label = slot.button.GetComponentInChildren<Text>();
+                var label = slot.button.GetComponentInChildren<TMP_Text>();
 
                 if (cost < 0)
                 {

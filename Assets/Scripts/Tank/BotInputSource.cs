@@ -1,13 +1,13 @@
-using TankDuel.Core;
 using UnityEngine;
 
 namespace TankDuel.Tank
 {
     /// <summary>
-    /// Тупой ИИ фарм-бота: бродит, увидев вражеский танк — едет к нему и стреляет,
-    /// пока тот в радиусе видимости. Роль — быть кормом для прокачки игрока,
-    /// не соперником. Врага ищем среди TankController напрямую (в сцене их всего
-    /// два — игрок и оппонент), без физических запросов.
+    /// Тупой ИИ фарм-бота: бродит по своей зоне, увидев цель — едет к ней и стреляет,
+    /// пока та в радиусе видимости. Роль — быть кормом для прокачки игрока, не соперником.
+    /// Цель и границы зоны назначает Spawner через Setup — сам бот никого не ищет:
+    /// поиск «любого танка чужой команды» находил фарм-бота с соседней половины
+    /// (у него команда владельца той зоны) и бот ехал к нему через стену.
     /// «Кусается редко» получаем не отдельным таймером здесь, а низким fireRate
     /// в конфиге бота — кулдаун выстрела уже считает сам TankController.
     /// </summary>
@@ -26,42 +26,42 @@ namespace TankDuel.Tank
         public Vector2 AimDirection { get; private set; } = Vector2.up;
         public bool IsFiring { get; private set; }
 
-        Health myHealth;
-        Transform enemyTank;
-        bool searchedEnemy;
+        Transform target;
+
+        Vector3 zoneCenter;
+        Vector2 zoneHalfExtents;
+        bool hasZone;
 
         Vector3 homePosition;
         Vector3 wanderTarget;
         float nextWanderPick;
 
-        void Awake()
+        /// <summary>
+        /// Вызывает Spawner сразу после выдачи объекта из пула: за кем ехать и в каких
+        /// границах бродить. Без зоны бот блуждает вокруг точки спавна — и на краю
+        /// половины упирается в стену, поэтому зону передаём всегда.
+        /// </summary>
+        public void Setup(Transform target, Vector3 zoneCenter, Vector2 zoneSize)
         {
-            myHealth = GetComponent<Health>();
+            this.target = target;
+            this.zoneCenter = zoneCenter;
+            zoneHalfExtents = zoneSize * 0.5f;
+            hasZone = true;
         }
 
         void OnEnable()
         {
             // Объект мог вернуться из пула на новом месте — блуждание отталкиваем от него.
-            // Врага ищем не здесь: в момент OnEnable у Spawner ещё не выставлен team (см. ниже).
+            // Цель обнуляем: её проставит Spawner следующим вызовом Setup.
             homePosition = transform.position;
             wanderTarget = homePosition;
             nextWanderPick = 0f;
-            searchedEnemy = false;
-            enemyTank = null;
+            target = null;
         }
 
         void Update()
         {
-            // Spawner выставляет Health.team сразу после того, как забрал объект из пула —
-            // то есть уже после OnEnable, но до первого Update. Поэтому ищем врага здесь,
-            // один раз за жизнь бота, а не в OnEnable.
-            if (!searchedEnemy)
-            {
-                enemyTank = FindEnemyTank();
-                searchedEnemy = true;
-            }
-
-            if (enemyTank != null && Vector3.Distance(transform.position, enemyTank.position) <= sightRange)
+            if (target != null && Vector3.Distance(transform.position, target.position) <= sightRange)
                 ChaseAndShoot();
             else
                 Wander();
@@ -69,8 +69,8 @@ namespace TankDuel.Tank
 
         void ChaseAndShoot()
         {
-            var toEnemy = enemyTank.position - transform.position;
-            var flat = new Vector2(toEnemy.x, toEnemy.z);
+            var toTarget = target.position - transform.position;
+            var flat = new Vector2(toTarget.x, toTarget.z);
             float distance = flat.magnitude;
 
             if (flat.sqrMagnitude > 0.0001f)
@@ -88,31 +88,30 @@ namespace TankDuel.Tank
             if (reached || Time.time >= nextWanderPick)
             {
                 var offset = Random.insideUnitCircle * wanderRadius;
-                wanderTarget = homePosition + new Vector3(offset.x, 0f, offset.y);
+                wanderTarget = ClampToZone(homePosition + new Vector3(offset.x, 0f, offset.y));
                 nextWanderPick = Time.time + wanderInterval;
             }
 
-            var toTarget = new Vector2(wanderTarget.x - transform.position.x, wanderTarget.z - transform.position.z);
-            if (toTarget.magnitude < 0.5f)
+            var toWander = new Vector2(wanderTarget.x - transform.position.x, wanderTarget.z - transform.position.z);
+            if (toWander.magnitude < 0.5f)
             {
                 MoveInput = Vector2.zero;
                 return;
             }
 
-            AimDirection = toTarget.normalized;
-            MoveInput = toTarget.normalized;
+            AimDirection = toWander.normalized;
+            MoveInput = toWander.normalized;
         }
 
-        Transform FindEnemyTank()
+        /// <summary>Держит точку блуждания внутри своей половины, чтобы бот не таранил стену.</summary>
+        Vector3 ClampToZone(Vector3 point)
         {
-            var tanks = FindObjectsByType<TankController>(FindObjectsSortMode.None);
-            foreach (var tank in tanks)
-            {
-                var health = tank.Health;
-                if (health != null && health.team != myHealth.team)
-                    return tank.transform;
-            }
-            return null;
+            if (!hasZone)
+                return point;
+
+            point.x = Mathf.Clamp(point.x, zoneCenter.x - zoneHalfExtents.x, zoneCenter.x + zoneHalfExtents.x);
+            point.z = Mathf.Clamp(point.z, zoneCenter.z - zoneHalfExtents.y, zoneCenter.z + zoneHalfExtents.y);
+            return point;
         }
     }
 }

@@ -2,6 +2,7 @@ using TankDuel.Core;
 using TankDuel.Data;
 using TankDuel.Tank;
 using TankDuel.UI;
+using TMPro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -350,6 +351,7 @@ namespace TankDuel.EditorTools
         {
             BuildMatchCore(); // панели нужны ScoreSystem и MatchController в сцене
 
+            EnsureTmpEssentials();
             EnsureEventSystem();
 
             var hudGo = GameObject.Find("HUD");
@@ -397,13 +399,7 @@ namespace TankDuel.EditorTools
             scoreRect.anchoredPosition = new Vector2(0f, -30f);
             scoreRect.sizeDelta = new Vector2(400f, 60f);
 
-            var scoreText = scoreRect.GetComponent<Text>();
-            if (scoreText == null)
-                scoreText = scoreRect.gameObject.AddComponent<Text>();
-            scoreText.font = GetDefaultFont();
-            scoreText.alignment = TextAnchor.MiddleCenter;
-            scoreText.fontSize = 32;
-            scoreText.color = Color.white;
+            var scoreText = EnsureTmpText(scoreRect, fontSize: 32f);
             scoreText.text = "Очки: 0";
 
             var upgradePanel = EnsureComponent<UpgradePanel>(panelRect.gameObject);
@@ -441,7 +437,77 @@ namespace TankDuel.EditorTools
                 Object.DestroyImmediate(legacyModule);
         }
 
-        static Font GetDefaultFont() => Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        const string TmpSettingsPath = "Assets/TextMesh Pro/Resources/TMP Settings.asset";
+
+        /// <summary>
+        /// TMP не работает без TMP Essential Resources, а их обычно импортируют руками
+        /// через диалог. Тянем их программно — иначе пункт меню собирает HUD с пустыми
+        /// надписями. Метод импортёра внутренний, поэтому через рефлексию: если TMP
+        /// сменит API, генератор не развалится, а просто попросит нажать пункт меню.
+        /// </summary>
+        static void EnsureTmpEssentials()
+        {
+            if (AssetDatabase.LoadAssetAtPath<TMP_Settings>(TmpSettingsPath) != null)
+                return; // уже импортированы
+
+            const string manualHint = "[Tank Duel] Не удалось импортировать TMP Essentials автоматически. " +
+                                      "Нажми Window → TextMeshPro → Import TMP Essential Resources и повтори Build HUD.";
+
+            // Имя сборки у TMP переезжало между версиями пакета — ищем тип по всем загруженным
+            System.Type importer = null;
+            foreach (var assembly in System.AppDomain.CurrentDomain.GetAssemblies())
+            {
+                importer = assembly.GetType("TMPro.TMP_PackageResourceImporter");
+                if (importer != null)
+                    break;
+            }
+
+            var method = importer?.GetMethod("ImportResources",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static);
+
+            if (method == null)
+            {
+                Debug.LogWarning(manualHint);
+                return;
+            }
+
+            try
+            {
+                // Первый аргумент — essentials, остальные (examples/extras) не нужны
+                var parameters = method.GetParameters();
+                var args = new object[parameters.Length];
+                for (int i = 0; i < args.Length; i++)
+                    args[i] = i == 0;
+
+                method.Invoke(null, args);
+                AssetDatabase.Refresh();
+                Debug.Log("[Tank Duel] Импортированы TMP Essential Resources.");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"{manualHint}\nПричина: {e.Message}");
+            }
+        }
+
+        /// <summary>Идемпотентный TMP-текст на готовом RectTransform.</summary>
+        static TextMeshProUGUI EnsureTmpText(RectTransform rect, float fontSize)
+        {
+            // Миграция с легаси UGUI: Text и TextMeshProUGUI оба Graphic, вдвоём на одном
+            // объекте не уживаются. У кого HUD собран прошлой версией генератора — снимаем старый.
+            var legacy = rect.GetComponent<Text>();
+            if (legacy != null)
+                Object.DestroyImmediate(legacy);
+
+            var text = rect.GetComponent<TextMeshProUGUI>();
+            if (text == null)
+                text = rect.gameObject.AddComponent<TextMeshProUGUI>();
+
+            text.alignment = TextAlignmentOptions.Center;
+            text.fontSize = fontSize;
+            text.color = Color.white;
+            return text;
+        }
 
         /// <summary>Идемпотентный RectTransform-ребёнок: находит по имени или создаёт новый.</summary>
         static RectTransform EnsureUiChild(Transform parent, string name)
@@ -477,13 +543,7 @@ namespace TankDuel.EditorTools
             labelRect.offsetMin = Vector2.zero;
             labelRect.offsetMax = Vector2.zero;
 
-            var text = labelRect.GetComponent<Text>();
-            if (text == null)
-                text = labelRect.gameObject.AddComponent<Text>();
-            text.font = GetDefaultFont();
-            text.alignment = TextAnchor.MiddleCenter;
-            text.fontSize = 16;
-            text.color = Color.white;
+            EnsureTmpText(labelRect, fontSize: 16f);
 
             return button;
         }
