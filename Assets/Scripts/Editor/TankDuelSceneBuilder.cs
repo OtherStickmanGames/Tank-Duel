@@ -351,7 +351,10 @@ namespace TankDuel.EditorTools
         {
             BuildMatchCore(); // панели нужны ScoreSystem и MatchController в сцене
 
-            EnsureTmpEssentials();
+            if (!EnsureTmpEssentials())
+                return; // ассеты ещё едут — HUD соберётся со следующего нажатия
+
+            var font = EnsureFontAsset();
             EnsureEventSystem();
 
             var hudGo = GameObject.Find("HUD");
@@ -386,10 +389,10 @@ namespace TankDuel.EditorTools
             layout.childForceExpandWidth = false;
             layout.childForceExpandHeight = false;
 
-            var damageButton = BuildUpgradeButton(panelRect, "DamageButton");
-            var fireRateButton = BuildUpgradeButton(panelRect, "FireRateButton");
-            var moveSpeedButton = BuildUpgradeButton(panelRect, "MoveSpeedButton");
-            var healthButton = BuildUpgradeButton(panelRect, "HealthButton");
+            var damageButton = BuildUpgradeButton(panelRect, "DamageButton", font);
+            var fireRateButton = BuildUpgradeButton(panelRect, "FireRateButton", font);
+            var moveSpeedButton = BuildUpgradeButton(panelRect, "MoveSpeedButton", font);
+            var healthButton = BuildUpgradeButton(panelRect, "HealthButton", font);
 
             // Счёт — верх экрана
             var scoreRect = EnsureUiChild(hudRect, "ScoreText");
@@ -399,7 +402,7 @@ namespace TankDuel.EditorTools
             scoreRect.anchoredPosition = new Vector2(0f, -30f);
             scoreRect.sizeDelta = new Vector2(400f, 60f);
 
-            var scoreText = EnsureTmpText(scoreRect, fontSize: 32f);
+            var scoreText = EnsureTmpText(scoreRect, font, fontSize: 32f);
             scoreText.text = "Очки: 0";
 
             var upgradePanel = EnsureComponent<UpgradePanel>(panelRect.gameObject);
@@ -438,17 +441,20 @@ namespace TankDuel.EditorTools
         }
 
         const string TmpSettingsPath = "Assets/TextMesh Pro/Resources/TMP Settings.asset";
+        const string TmpSourceFontPath = "Assets/TextMesh Pro/Fonts/LiberationSans.ttf";
+        const string FontAssetPath = "Assets/Art/Fonts/TankDuel SDF.asset";
 
         /// <summary>
         /// TMP не работает без TMP Essential Resources, а их обычно импортируют руками
         /// через диалог. Тянем их программно — иначе пункт меню собирает HUD с пустыми
         /// надписями. Метод импортёра внутренний, поэтому через рефлексию: если TMP
         /// сменит API, генератор не развалится, а просто попросит нажать пункт меню.
+        /// false — ассетов ещё нет, сборку HUD надо отложить до следующего запуска.
         /// </summary>
-        static void EnsureTmpEssentials()
+        static bool EnsureTmpEssentials()
         {
             if (AssetDatabase.LoadAssetAtPath<TMP_Settings>(TmpSettingsPath) != null)
-                return; // уже импортированы
+                return true; // уже импортированы
 
             const string manualHint = "[Tank Duel] Не удалось импортировать TMP Essentials автоматически. " +
                                       "Нажми Window → TextMeshPro → Import TMP Essential Resources и повтори Build HUD.";
@@ -469,7 +475,7 @@ namespace TankDuel.EditorTools
             if (method == null)
             {
                 Debug.LogWarning(manualHint);
-                return;
+                return false;
             }
 
             try
@@ -482,16 +488,92 @@ namespace TankDuel.EditorTools
 
                 method.Invoke(null, args);
                 AssetDatabase.Refresh();
-                Debug.Log("[Tank Duel] Импортированы TMP Essential Resources.");
             }
             catch (System.Exception e)
             {
                 Debug.LogWarning($"{manualHint}\nПричина: {e.Message}");
+                return false;
             }
+
+            // ImportPackage кладёт файлы в очередь, а не разом: в этом же вызове меню
+            // ассетов ещё нет, и компоненты получились бы без шрифта. Проверяем и,
+            // если не успели, просим нажать пункт меню повторно.
+            if (AssetDatabase.LoadAssetAtPath<TMP_Settings>(TmpSettingsPath) != null)
+                return true;
+
+            Debug.Log("[Tank Duel] Запущен импорт TMP Essential Resources. " +
+                      "Дождись окончания импорта и нажми Build HUD ещё раз.");
+            return false;
+        }
+
+        /// <summary>
+        /// Шрифт с кириллицей. Штатный «LiberationSans SDF» из TMP Essentials собран
+        /// со статическим ASCII-атласом — русские надписи в нём превращаются в квадраты.
+        /// Поэтому делаем свой ассет из той же TTF, но с динамическим атласом:
+        /// глифы дорисовываются по мере надобности, кириллица включительно.
+        /// </summary>
+        static TMP_FontAsset EnsureFontAsset()
+        {
+            var existing = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(FontAssetPath);
+            if (existing != null)
+                return existing;
+
+            var sourceFont = AssetDatabase.LoadAssetAtPath<Font>(TmpSourceFontPath);
+            if (sourceFont == null)
+            {
+                Debug.LogWarning($"[Tank Duel] Не найден {TmpSourceFontPath} — надписи останутся без шрифта.");
+                return null;
+            }
+
+            EnsureFolder("Assets/Art", "Fonts");
+
+            // Аргументы позиционные: размер сэмплирования, паддинг, режим рендера,
+            // ширина и высота атласа, режим наполнения, мультиатлас
+            var fontAsset = TMP_FontAsset.CreateFontAsset(
+                sourceFont,
+                48,
+                5,
+                UnityEngine.TextCore.LowLevel.GlyphRenderMode.SDFAA,
+                1024,
+                1024,
+                AtlasPopulationMode.Dynamic,
+                true);
+
+            if (fontAsset == null)
+            {
+                Debug.LogWarning("[Tank Duel] TMP не смог собрать шрифт из LiberationSans.ttf.");
+                return null;
+            }
+
+            fontAsset.name = "TankDuel SDF";
+            AssetDatabase.CreateAsset(fontAsset, FontAssetPath);
+
+            // Атлас и материал живут внутри ассета шрифта, иначе после перезапуска
+            // редактора ссылки на них обнуляются и текст снова пропадает
+            if (fontAsset.atlasTextures != null && fontAsset.atlasTextures.Length > 0)
+            {
+                fontAsset.atlasTextures[0].name = "TankDuel SDF Atlas";
+                AssetDatabase.AddObjectToAsset(fontAsset.atlasTextures[0], fontAsset);
+            }
+            if (fontAsset.material != null)
+            {
+                fontAsset.material.name = "TankDuel SDF Material";
+                AssetDatabase.AddObjectToAsset(fontAsset.material, fontAsset);
+            }
+
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[Tank Duel] Создан шрифт с кириллицей: {FontAssetPath}");
+            return fontAsset;
+        }
+
+        static void EnsureFolder(string parent, string child)
+        {
+            if (!AssetDatabase.IsValidFolder($"{parent}/{child}"))
+                AssetDatabase.CreateFolder(parent, child);
         }
 
         /// <summary>Идемпотентный TMP-текст на готовом RectTransform.</summary>
-        static TextMeshProUGUI EnsureTmpText(RectTransform rect, float fontSize)
+        static TextMeshProUGUI EnsureTmpText(RectTransform rect, TMP_FontAsset font, float fontSize)
         {
             // Миграция с легаси UGUI: Text и TextMeshProUGUI оба Graphic, вдвоём на одном
             // объекте не уживаются. У кого HUD собран прошлой версией генератора — снимаем старый.
@@ -502,6 +584,11 @@ namespace TankDuel.EditorTools
             var text = rect.GetComponent<TextMeshProUGUI>();
             if (text == null)
                 text = rect.gameObject.AddComponent<TextMeshProUGUI>();
+
+            // Назначаем явно: дефолтный шрифт из TMP Settings не только приезжает
+            // с задержкой после импорта, но ещё и без кириллицы
+            if (font != null)
+                text.font = font;
 
             text.alignment = TextAlignmentOptions.Center;
             text.fontSize = fontSize;
@@ -523,7 +610,7 @@ namespace TankDuel.EditorTools
             return child;
         }
 
-        static Button BuildUpgradeButton(Transform parent, string name)
+        static Button BuildUpgradeButton(Transform parent, string name, TMP_FontAsset font)
         {
             var rect = EnsureUiChild(parent, name);
             rect.sizeDelta = new Vector2(160f, 80f);
@@ -543,7 +630,7 @@ namespace TankDuel.EditorTools
             labelRect.offsetMin = Vector2.zero;
             labelRect.offsetMax = Vector2.zero;
 
-            EnsureTmpText(labelRect, fontSize: 16f);
+            EnsureTmpText(labelRect, font, fontSize: 16f);
 
             return button;
         }
